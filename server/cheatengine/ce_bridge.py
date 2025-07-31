@@ -46,6 +46,7 @@ class CheatEngineBridge:
         
         # Common installation paths
         common_paths = [
+            r"C:\dbengine",
             r"C:\Program Files\Cheat Engine",
             r"C:\Program Files (x86)\Cheat Engine",
             r"C:\Cheat Engine"
@@ -73,11 +74,21 @@ class CheatEngineBridge:
         for path in common_paths:
             ce_path = Path(path)
             if ce_path.exists():
-                exe_path = ce_path / "cheatengine-x86_64.exe"
-                if not exe_path.exists():
-                    exe_path = ce_path / "cheatengine.exe"
+                # Try different executable names in order of preference
+                exe_candidates = [
+                    "dbengine-x86_64.exe",
+                    "cheatengine-x86_64.exe",
+                    "cheatengine.exe"
+                ]
                 
-                if exe_path.exists():
+                exe_path = None
+                for exe_name in exe_candidates:
+                    candidate_path = ce_path / exe_name
+                    if candidate_path.exists():
+                        exe_path = candidate_path
+                        break
+                
+                if exe_path:
                     version = self._get_ce_version(exe_path)
                     return CEInstallation(
                         path=str(ce_path),

@@ -10,7 +10,8 @@ import subprocess
 from pathlib import Path
 
 # Add server directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'server'))
+server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'server')
+sys.path.insert(0, server_path)
 
 def test_imports():
     """Test importing required dependencies"""
@@ -53,12 +54,8 @@ def test_server_modules():
         print(f"❌ ProcessManager import failed: {e}")
         return False
         
-    try:
-        from memory.reader import MemoryReader  
-        print("✅ MemoryReader imported")
-    except ImportError as e:
-        print(f"❌ MemoryReader import failed: {e}")
-        return False
+    # Note: Memory functionality removed - all memory searches now done via Cheat Engine
+    print("✅ Memory functionality delegated to Cheat Engine")
         
     try:
         from config.whitelist import ProcessWhitelist

@@ -10,7 +10,7 @@ import subprocess
 import time
 
 # Add server directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'server'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
 
 def test_server_running():
     """Check if server is running"""
@@ -37,7 +37,7 @@ def test_server_running():
     print("\n🔧 Testing server modules...")
     try:
         from process.manager import ProcessManager
-        from memory.reader import MemoryReader  
+        # Note: Memory functionality removed - all memory searches now done via Cheat Engine
         from config.whitelist import ProcessWhitelist
         print("✅ All server modules imported successfully")
         

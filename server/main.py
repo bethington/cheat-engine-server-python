@@ -13,12 +13,9 @@ from mcp.types import Tool
 
 # Import our modules
 from process.manager import ProcessManager
-from memory.reader import MemoryReader
-from memory.scanner import MemoryScanner
-from memory.analyzer import StructureAnalyzer
-from memory.symbols import SymbolManager
+from process.launcher import ApplicationLauncher
 from utils.validators import validate_address, validate_size
-from utils.formatters import format_memory_data, format_process_info
+from utils.formatters import format_process_info
 from config.settings import ServerConfig
 from config.whitelist import ProcessWhitelist
 
@@ -28,6 +25,25 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Import automation tools for integration
+try:
+    import sys
+    parent_dir = Path(__file__).parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+    from automation_tools import register_automation_tools
+    from gui_automation.tools.mcp_tools import ALL_PYAUTOGUI_TOOLS, PyAutoGUIToolHandler
+    AUTOMATION_AVAILABLE = True
+    PYAUTOGUI_AVAILABLE = True
+    logger.info("Automation tools and PyAutoGUI modules loaded successfully")
+except ImportError as e:
+    AUTOMATION_AVAILABLE = False
+    PYAUTOGUI_AVAILABLE = False
+    logger.warning(f"Automation tools not available: {e}")
+except ImportError as e:
+    logger.warning(f"Automation tools not available: {e}")
+    AUTOMATION_AVAILABLE = False
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description="MCP Cheat Engine Server")
@@ -46,11 +62,20 @@ mcp = FastMCP("cheat-engine-server")
 # Global state
 server_config = ServerConfig()
 process_manager = ProcessManager()
-memory_reader = MemoryReader()
-memory_scanner = MemoryScanner()
-structure_analyzer = StructureAnalyzer()
-symbol_manager = SymbolManager()
 process_whitelist = ProcessWhitelist()
+
+# Initialize application launcher
+app_launcher = None
+
+# Initialize PyAutoGUI handler
+pyautogui_handler = None
+if PYAUTOGUI_AVAILABLE:
+    try:
+        pyautogui_handler = PyAutoGUIToolHandler()
+        logger.info("PyAutoGUI handler initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize PyAutoGUI handler: {e}")
+        PYAUTOGUI_AVAILABLE = False
 
 # Current attached process
 current_process = None
@@ -109,9 +134,6 @@ def attach_to_process(identifier: str, access_level: str = "read") -> str:
         process_info = process_manager.attach_process(identifier, access_level)
         current_process = process_info
         
-        # Initialize memory reader with the process
-        memory_reader.set_process(process_info)
-        
         logger.info(f"Successfully attached to process {process_info['pid']} ({process_info['name']})")
         
         return f"Successfully attached to process:\n{format_process_info([process_info])}"
@@ -152,7 +174,6 @@ def detach_process() -> str:
         logger.info(f"Detaching from process {current_process['pid']}")
         
         process_manager.detach_process()
-        memory_reader.clear_process()
         current_process = None
         
         return "Successfully detached from process"
@@ -162,234 +183,240 @@ def detach_process() -> str:
         return f"Error detaching from process: {str(e)}"
 
 
-@mcp.tool()
-def read_memory_region(address: str, size: int, data_type: str = "raw") -> str:
-    """Read and analyze a memory region from attached process
-    
-    Args:
-        address: Memory address in hex format (e.g., "0x12345678")
-        size: Number of bytes to read
-        data_type: Type of data to interpret ("raw", "int32", "float", "string", "auto")
-    """
-    try:
-        if not current_process:
-            return "Error: No process currently attached"
-        
-        # Validate inputs
-        addr = validate_address(address)
-        if addr is None:
-            return f"Error: Invalid address format: {address}"
-        
-        if not validate_size(size):
-            return f"Error: Invalid size: {size}"
-        
-        logger.info(f"Reading memory at {address}, size {size}, type {data_type}")
-        
-        # Read memory
-        data = memory_reader.read_memory(addr, size)
-        if data is None:
-            return f"Error: Could not read memory at address {address}"
-        
-        # Format the data according to requested type
-        formatted_data = format_memory_data(data, data_type, addr)
-        
-        return formatted_data
-    
-    except Exception as e:
-        logger.error(f"Error reading memory: {e}")
-        return f"Error reading memory: {str(e)}"
-
+# ==========================================
+# APPLICATION LAUNCHER TOOLS
+# ==========================================
 
 @mcp.tool()
-def scan_memory(pattern: str, region_start: str = None, region_size: int = None) -> str:
-    """Pattern scanning within memory regions
+def get_whitelisted_applications() -> str:
+    """Get list of applications that can be launched"""
+    global app_launcher
     
-    Args:
-        pattern: Byte pattern to search for (hex format, e.g., "48 8B 05 ?? ?? ?? ??")
-        region_start: Starting address for scan (optional, scans all accessible memory if not specified)
-        region_size: Size of region to scan (optional)
-    """
     try:
-        if not current_process:
-            return "Error: No process currently attached"
+        if not app_launcher:
+            return "Application launcher not initialized"
         
-        logger.info(f"Scanning memory for pattern: {pattern}")
+        applications = app_launcher.get_whitelisted_applications()
         
-        # Parse region parameters
-        start_addr = None
-        if region_start:
-            start_addr = validate_address(region_start)
-            if start_addr is None:
-                return f"Error: Invalid region start address: {region_start}"
+        if not applications:
+            return "No whitelisted applications found"
         
-        if region_size and not validate_size(region_size):
-            return f"Error: Invalid region size: {region_size}"
+        result = "Whitelisted Applications:\\n"
+        result += "=" * 40 + "\\n"
         
-        # Perform scan
-        results = memory_scanner.scan_pattern(pattern, start_addr, region_size)
+        # Group by category
+        categories = {}
+        for app in applications:
+            category = app['category']
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(app)
         
-        if not results:
-            return f"No matches found for pattern: {pattern}"
-        
-        # Format results
-        result_text = f"Found {len(results)} matches for pattern '{pattern}':\n"
-        for i, addr in enumerate(results[:20]):  # Limit to first 20 results
-            result_text += f"{i+1:3d}: 0x{addr:08X}\n"
-        
-        if len(results) > 20:
-            result_text += f"... and {len(results) - 20} more matches"
-        
-        return result_text
-    
-    except Exception as e:
-        logger.error(f"Error scanning memory: {e}")
-        return f"Error scanning memory: {str(e)}"
-
-
-@mcp.tool()
-def get_memory_regions() -> str:
-    """Get virtual memory layout of attached process"""
-    try:
-        if not current_process:
-            return "Error: No process currently attached"
-        
-        logger.info("Getting memory regions")
-        
-        regions = memory_reader.get_memory_regions()
-        if not regions:
-            return "No memory regions found"
-        
-        result = "Memory Regions:\n"
-        result += "Base Address    Size        Protection  Type\n"
-        result += "-" * 50 + "\n"
-        
-        for region in regions:
-            result += f"0x{region['base']:08X}  {region['size']:>10}  {region['protection']:<10} {region['type']}\n"
+        for category, apps in sorted(categories.items()):
+            result += f"\\n{category.upper()}:\\n"
+            for app in apps:
+                result += f"  • {app['process_name']} - {app['description']}\\n"
+                if app['executable_path']:
+                    result += f"    Path: {app['executable_path']}\\n"
+                else:
+                    result += f"    Path: Not found or pattern match\\n"
         
         return result
-    
+        
     except Exception as e:
-        logger.error(f"Error getting memory regions: {e}")
-        return f"Error getting memory regions: {str(e)}"
+        logger.error(f"Error getting whitelisted applications: {e}")
+        return f"Error getting whitelisted applications: {str(e)}"
 
 
 @mcp.tool()
-def analyze_data_structure(address: str, max_size: int = 256, hint_type: str = None) -> str:
-    """Analyze memory region and identify probable data structures
+def launch_application(process_name: str, arguments: str = "", working_directory: str = "") -> str:
+    """Launch a whitelisted application
     
     Args:
-        address: Starting address to analyze
-        max_size: Maximum structure size to analyze
-        hint_type: Expected structure type hint (optional)
+        process_name: Name of the process to launch (e.g., notepad.exe)
+        arguments: Optional command line arguments (space-separated)
+        working_directory: Optional working directory (empty for default)
     """
-    try:
-        if not current_process:
-            return "Error: No process currently attached"
-        
-        addr = validate_address(address)
-        if addr is None:
-            return f"Error: Invalid address format: {address}"
-        
-        if not validate_size(max_size):
-            return f"Error: Invalid max_size: {max_size}"
-        
-        logger.info(f"Analyzing data structure at {address}")
-        
-        # Read the memory for analysis
-        data = memory_reader.read_memory(addr, max_size)
-        if data is None:
-            return f"Error: Could not read memory at address {address}"
-        
-        # Analyze the structure
-        analysis = structure_analyzer.analyze_structure(data, addr, hint_type)
-        
-        return format_memory_data(data, "structure", addr, analysis)
+    global app_launcher
     
+    try:
+        if not app_launcher:
+            return "Application launcher not initialized"
+        
+        # Parse arguments
+        arg_list = arguments.split() if arguments.strip() else None
+        work_dir = working_directory.strip() if working_directory.strip() else None
+        
+        logger.info(f"Launching application: {process_name}")
+        
+        success, message, pid = app_launcher.launch_application(
+            process_name, arg_list, work_dir
+        )
+        
+        if success:
+            logger.info(f"Successfully launched {process_name} with PID {pid}")
+            return f"SUCCESS: {message}"
+        else:
+            logger.error(f"Failed to launch {process_name}: {message}")
+            return f"ERROR: {message}"
+            
     except Exception as e:
-        logger.error(f"Error analyzing data structure: {e}")
-        return f"Error analyzing data structure: {str(e)}"
+        logger.error(f"Error launching application: {e}")
+        return f"Error launching application: {str(e)}"
 
 
 @mcp.tool()
-def find_pointers(target_address: str, search_regions: List[str] = None) -> str:
-    """Find pointer chains targeting specific addresses
+def terminate_application(pid: int, force: bool = False) -> str:
+    """Terminate a running application
     
     Args:
-        target_address: Address to find pointers to
-        search_regions: List of memory region addresses to search in (optional)
+        pid: Process ID to terminate
+        force: Whether to force kill (True) or graceful terminate (False)
     """
+    global app_launcher
+    
     try:
-        if not current_process:
-            return "Error: No process currently attached"
+        if not app_launcher:
+            return "Application launcher not initialized"
         
-        target_addr = validate_address(target_address)
-        if target_addr is None:
-            return f"Error: Invalid target address format: {target_address}"
+        logger.info(f"Terminating application PID {pid}, force={force}")
         
-        logger.info(f"Finding pointers to {target_address}")
+        success, message = app_launcher.terminate_application(pid, force)
         
-        # Find pointers
-        pointers = memory_scanner.find_pointers(target_addr, search_regions)
+        if success:
+            logger.info(f"Successfully terminated PID {pid}")
+            return f"SUCCESS: {message}"
+        else:
+            logger.error(f"Failed to terminate PID {pid}: {message}")
+            return f"ERROR: {message}"
+            
+    except Exception as e:
+        logger.error(f"Error terminating application: {e}")
+        return f"Error terminating application: {str(e)}"
+
+
+@mcp.tool()
+def get_launched_applications() -> str:
+    """Get list of applications launched in this session"""
+    global app_launcher
+    
+    try:
+        if not app_launcher:
+            return "Application launcher not initialized"
         
-        if not pointers:
-            return f"No pointers found targeting address {target_address}"
+        applications = app_launcher.get_launched_applications()
         
-        result = f"Found {len(pointers)} pointers to {target_address}:\n"
-        for i, pointer_info in enumerate(pointers[:20]):  # Limit to first 20
-            result += f"{i+1:3d}: 0x{pointer_info['address']:08X} -> 0x{pointer_info['value']:08X}\n"
+        if not applications:
+            return "No applications launched in this session"
         
-        if len(pointers) > 20:
-            result += f"... and {len(pointers) - 20} more pointers"
+        result = "Launched Applications:\\n"
+        result += "=" * 40 + "\\n"
+        
+        for app in applications:
+            result += f"\\nPID: {app['pid']}\\n"
+            result += f"Name: {app['process_name']}\\n"
+            result += f"Status: {app['status']}\\n"
+            result += f"Launch Time: {app['launch_time']}\\n"
+            result += f"Command: {' '.join(app['command_line'])}\\n"
+            result += f"Working Dir: {app['working_directory']}\\n"
+            result += "-" * 30 + "\\n"
         
         return result
-    
+        
     except Exception as e:
-        logger.error(f"Error finding pointers: {e}")
-        return f"Error finding pointers: {str(e)}"
+        logger.error(f"Error getting launched applications: {e}")
+        return f"Error getting launched applications: {str(e)}"
 
 
 @mcp.tool()
-def disassemble_region(address: str, size: int = 64) -> str:
-    """Disassemble assembly code from memory region
+def get_application_info(pid: int) -> str:
+    """Get detailed information about a specific launched application
     
     Args:
-        address: Starting address for disassembly
-        size: Number of bytes to disassemble
+        pid: Process ID to get information for
     """
+    global app_launcher
+    
     try:
-        if not current_process:
-            return "Error: No process currently attached"
+        if not app_launcher:
+            return "Application launcher not initialized"
         
-        addr = validate_address(address)
-        if addr is None:
-            return f"Error: Invalid address format: {address}"
+        app_info = app_launcher.get_application_by_pid(pid)
         
-        if not validate_size(size):
-            return f"Error: Invalid size: {size}"
+        if not app_info:
+            return f"No information found for PID {pid} (not launched by this session)"
         
-        logger.info(f"Disassembling at {address}, size {size}")
-        
-        # Read memory
-        data = memory_reader.read_memory(addr, size)
-        if data is None:
-            return f"Error: Could not read memory at address {address}"
-        
-        # Disassemble
-        disasm = structure_analyzer.disassemble_code(data, addr)
-        
-        if not disasm:
-            return f"Could not disassemble code at {address}"
-        
-        result = f"Disassembly at {address}:\n"
-        result += "-" * 40 + "\n"
-        for instruction in disasm:
-            result += f"0x{instruction['address']:08X}: {instruction['mnemonic']:<8} {instruction['op_str']}\n"
+        result = f"Application Information for PID {pid}:\\n"
+        result += "=" * 40 + "\\n"
+        result += f"Process Name: {app_info['process_name']}\\n"
+        result += f"Executable Path: {app_info['exe_path']}\\n"
+        result += f"Status: {app_info['status']}\\n"
+        result += f"Launch Time: {app_info['launch_time']}\\n"
+        result += f"Command Line: {' '.join(app_info['command_line'])}\\n"
+        result += f"Working Directory: {app_info['working_directory']}\\n"
         
         return result
-    
+        
     except Exception as e:
-        logger.error(f"Error disassembling: {e}")
-        return f"Error disassembling: {str(e)}"
+        logger.error(f"Error getting application info: {e}")
+        return f"Error getting application info: {str(e)}"
+
+
+@mcp.tool()
+def cleanup_terminated_applications() -> str:
+    """Remove terminated applications from tracking"""
+    global app_launcher
+    
+    try:
+        if not app_launcher:
+            return "Application launcher not initialized"
+        
+        removed_count = app_launcher.cleanup_terminated_applications()
+        
+        if removed_count > 0:
+            return f"Cleaned up {removed_count} terminated application(s)"
+        else:
+            return "No terminated applications to clean up"
+            
+    except Exception as e:
+        logger.error(f"Error cleaning up applications: {e}")
+        return f"Error cleaning up applications: {str(e)}"
+
+
+@mcp.tool()
+def terminate_all_launched_applications(force: bool = False) -> str:
+    """Terminate all applications launched in this session
+    
+    Args:
+        force: Whether to force kill all applications
+    """
+    global app_launcher
+    
+    try:
+        if not app_launcher:
+            return "Application launcher not initialized"
+        
+        logger.info(f"Terminating all launched applications, force={force}")
+        
+        results = app_launcher.terminate_all_launched_applications(force)
+        
+        result = f"Bulk Termination Results:\\n"
+        result += f"Terminated: {results['terminated']}\\n"
+        result += f"Failed: {results['failed']}\\n"
+        result += f"\\nDetails:\\n"
+        for message in results['messages']:
+            result += f"  • {message}\\n"
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error terminating all applications: {e}")
+        return f"Error terminating all applications: {str(e)}"
+
+
+# ==========================================
+# END APPLICATION LAUNCHER TOOLS
+# ==========================================
 
 
 def main():
@@ -408,6 +435,23 @@ def main():
         
         # Initialize whitelist
         process_whitelist.load_whitelist(server_config.get_whitelist_path())
+        
+        # Initialize application launcher
+        global app_launcher
+        app_launcher = ApplicationLauncher(process_whitelist)
+        
+        # Set session file for persistence (optional)
+        session_file = os.path.join(os.path.dirname(server_config.get_whitelist_path()), 'launcher_session.json')
+        app_launcher.set_session_file(session_file)
+        logger.info("Application launcher initialized")
+        
+        # Register automation tools if available
+        if AUTOMATION_AVAILABLE:
+            try:
+                automation_tools = register_automation_tools(mcp)
+                logger.info(f"Registered {len(automation_tools)} automation tools")
+            except Exception as e:
+                logger.error(f"Failed to register automation tools: {e}")
         
         logger.info("MCP Cheat Engine Server starting...")
         
@@ -482,6 +526,488 @@ def get_file_info(path: str) -> str:
         return f"Permission denied accessing: {path}"
     except Exception as e:
         return f"Error getting file info: {str(e)}"
+
+
+# ==========================================
+# PYAUTOGUI TOOL HANDLERS
+# ==========================================
+
+# Screen capture & analysis tools
+@mcp.tool()
+def pyautogui_screenshot(region: Optional[List[int]] = None, save_path: Optional[str] = None) -> str:
+    """Take a screenshot of the entire screen or a specific region"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_screenshot({
+            "region": region,
+            "save_path": save_path
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Screenshot captured successfully:\n- Size: {data['width']}x{data['height']}\n- Region: {data.get('region', 'Full screen')}\n- Saved: {data.get('save_path', 'Not saved')}\n- Cache key: {data['cache_key']}"
+        else:
+            return f"Screenshot failed: {result['error']}"
+    except Exception as e:
+        return f"Screenshot error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_get_pixel_color(x: int, y: int) -> str:
+    """Get the RGB color value of a pixel at specific screen coordinates"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_pixel_color({"x": x, "y": y}))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Pixel color at ({data['x']}, {data['y']}):\n- RGB: {data['rgb']}\n- Hex: {data['hex']}"
+        else:
+            return f"Get pixel color failed: {result['error']}"
+    except Exception as e:
+        return f"Get pixel color error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_find_image(image_path: str, confidence: float = 0.8, region: Optional[List[int]] = None) -> str:
+    """Find an image on the screen using template matching"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_find_image({
+            "image_path": image_path,
+            "confidence": confidence,
+            "region": region
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            match = data["match"]
+            if match["found"]:
+                return f"Image found:\n- Location: ({match['x']}, {match['y']})\n- Size: {match['width']}x{match['height']}\n- Center: ({match['center_x']}, {match['center_y']})\n- Confidence: {data['search_confidence']}"
+            else:
+                return f"Image not found (confidence: {data['search_confidence']})"
+        else:
+            return f"Image search failed: {result['error']}"
+    except Exception as e:
+        return f"Image search error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_find_all_images(image_path: str, confidence: float = 0.8, region: Optional[List[int]] = None) -> str:
+    """Find all instances of an image on the screen"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_find_all_images({
+            "image_path": image_path,
+            "confidence": confidence,
+            "region": region
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            matches = data["matches"]
+            if matches:
+                output = [f"Found {len(matches)} instances:"]
+                for i, match in enumerate(matches[:5], 1):  # Show first 5
+                    output.append(f"  {i}. ({match['x']}, {match['y']}) - {match['width']}x{match['height']}")
+                if len(matches) > 5:
+                    output.append(f"  ... and {len(matches) - 5} more")
+                return "\n".join(output)
+            else:
+                return f"No instances found (confidence: {data['search_confidence']})"
+        else:
+            return f"Find all images failed: {result['error']}"
+    except Exception as e:
+        return f"Find all images error: {str(e)}"
+
+# Mouse control tools
+@mcp.tool()
+def pyautogui_get_mouse_position() -> str:
+    """Get the current mouse cursor position"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_mouse_position({}))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Mouse position: ({data['x']}, {data['y']})"
+        else:
+            return f"Get mouse position failed: {result['error']}"
+    except Exception as e:
+        return f"Get mouse position error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_move_mouse(x: int, y: int, duration: float = 0.5, relative: bool = False) -> str:
+    """Move the mouse cursor to specific coordinates"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_move_mouse({
+            "x": x,
+            "y": y,
+            "duration": duration,
+            "relative": relative
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Mouse moved to ({data['target_x']}, {data['target_y']}) in {data['duration']}s"
+        else:
+            return f"Move mouse failed: {result['error']}"
+    except Exception as e:
+        return f"Move mouse error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_click_mouse(x: Optional[int] = None, y: Optional[int] = None, button: str = "left", clicks: int = 1, interval: float = 0.0) -> str:
+    """Click the mouse at specific coordinates or current position"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_click_mouse({
+            "x": x,
+            "y": y,
+            "button": button,
+            "clicks": clicks,
+            "interval": interval
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Mouse clicked at {data['position']} - Button: {data['button']}, Clicks: {data['clicks']}"
+        else:
+            return f"Mouse click failed: {result['error']}"
+    except Exception as e:
+        return f"Mouse click error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_drag_mouse(start_x: int, start_y: int, end_x: int, end_y: int, duration: float = 1.0, button: str = "left") -> str:
+    """Drag the mouse from start coordinates to end coordinates"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_drag_mouse({
+            "start_x": start_x,
+            "start_y": start_y,
+            "end_x": end_x,
+            "end_y": end_y,
+            "duration": duration,
+            "button": button
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Mouse dragged from {data['start_position']} to {data['end_position']} - Distance: {data['distance']:.1f}px"
+        else:
+            return f"Mouse drag failed: {result['error']}"
+    except Exception as e:
+        return f"Mouse drag error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_scroll_mouse(clicks: int, x: Optional[int] = None, y: Optional[int] = None) -> str:
+    """Scroll the mouse wheel at specific coordinates or current position"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_scroll_mouse({
+            "clicks": clicks,
+            "x": x,
+            "y": y
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Mouse scrolled {data['direction']} {abs(data['clicks'])} clicks at {data['position']}"
+        else:
+            return f"Mouse scroll failed: {result['error']}"
+    except Exception as e:
+        return f"Mouse scroll error: {str(e)}"
+
+# Keyboard automation tools
+@mcp.tool()
+def pyautogui_type_text(text: str, interval: float = 0.0) -> str:
+    """Type text with optional interval between characters"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_type_text({
+            "text": text,
+            "interval": interval
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Typed text: '{data['text'][:50]}{'...' if len(data['text']) > 50 else ''}' ({data['length']} chars)"
+        else:
+            return f"Type text failed: {result['error']}"
+    except Exception as e:
+        return f"Type text error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_press_key(key: str, presses: int = 1, interval: float = 0.0) -> str:
+    """Press a specific key one or more times"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_press_key({
+            "key": key,
+            "presses": presses,
+            "interval": interval
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Pressed key '{data['key']}' {data['presses']} time(s)"
+        else:
+            return f"Press key failed: {result['error']}"
+    except Exception as e:
+        return f"Press key error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_key_combination(keys: List[str]) -> str:
+    """Press a combination of keys simultaneously (hotkeys)"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_key_combination({
+            "keys": keys
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Pressed key combination: {data['combination']}"
+        else:
+            return f"Key combination failed: {result['error']}"
+    except Exception as e:
+        return f"Key combination error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_hold_key(key: str, duration: float = 1.0) -> str:
+    """Hold a key down for a specified duration"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_hold_key({
+            "key": key,
+            "duration": duration
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Held key '{data['key']}' for {data['duration']} seconds"
+        else:
+            return f"Hold key failed: {result['error']}"
+    except Exception as e:
+        return f"Hold key error: {str(e)}"
+
+# Utility & configuration tools
+@mcp.tool()
+def pyautogui_get_screen_info() -> str:
+    """Get detailed information about the screen (resolution, size)"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_screen_info({}))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Screen info:\n- Resolution: {data['width']}x{data['height']}\n- Primary monitor: {data['primary_monitor']}\n- Monitor count: {data['monitor_count']}"
+        else:
+            return f"Get screen info failed: {result['error']}"
+    except Exception as e:
+        return f"Get screen info error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_is_on_screen(x: int, y: int) -> str:
+    """Check if given coordinates are within screen bounds"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_is_on_screen({
+            "x": x,
+            "y": y
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Coordinates ({data['x']}, {data['y']}) are {'on' if data['on_screen'] else 'off'} screen"
+        else:
+            return f"Check coordinates failed: {result['error']}"
+    except Exception as e:
+        return f"Check coordinates error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_set_pause(pause_duration: float) -> str:
+    """Set the pause duration between PyAutoGUI actions"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_set_pause({
+            "pause_duration": pause_duration
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Pause duration changed from {data['old_pause']} to {data['new_pause']} seconds"
+        else:
+            return f"Set pause failed: {result['error']}"
+    except Exception as e:
+        return f"Set pause error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_set_failsafe(enabled: bool) -> str:
+    """Enable or disable PyAutoGUI failsafe (emergency stop by moving mouse to corner)"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_set_failsafe({
+            "enabled": enabled
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Failsafe {'enabled' if data['new_failsafe'] else 'disabled'} (was {'enabled' if data['old_failsafe'] else 'disabled'})"
+        else:
+            return f"Set failsafe failed: {result['error']}"
+    except Exception as e:
+        return f"Set failsafe error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_get_available_keys() -> str:
+    """Get a list of all available keyboard keys that can be used with PyAutoGUI"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_get_available_keys({}))
+        
+        if result["success"]:
+            data = result["data"]
+            categories = data["categories"]
+            output = [f"Available keys ({data['total_count']} total):"]
+            
+            for category, keys in categories.items():
+                if keys:
+                    output.append(f"\n{category.replace('_', ' ').title()}:")
+                    output.append(f"  {', '.join(keys[:10])}")
+                    if len(keys) > 10:
+                        output.append(f"  ... and {len(keys) - 10} more")
+            
+            return "\n".join(output)
+        else:
+            return f"Get available keys failed: {result['error']}"
+    except Exception as e:
+        return f"Get available keys error: {str(e)}"
+
+# Advanced feature tools
+@mcp.tool()
+def pyautogui_create_image_template(name: str, x: int, y: int, width: int, height: int) -> str:
+    """Create an image template from a screen region for future recognition"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_create_template({
+            "name": name,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Template '{data['template_name']}' created from region {data['region']} - Size: {data['width']}x{data['height']}"
+        else:
+            return f"Create template failed: {result['error']}"
+    except Exception as e:
+        return f"Create template error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_find_template(template_name: str, confidence: float = 0.8) -> str:
+    """Find a previously created image template on the screen"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_find_template({
+            "template_name": template_name,
+            "confidence": confidence
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            match = data["match"]
+            if match["found"]:
+                return f"Template '{data['template_name']}' found at ({match['x']}, {match['y']}) - Center: ({match['center_x']}, {match['center_y']})"
+            else:
+                return f"Template '{data['template_name']}' not found"
+        else:
+            return f"Find template failed: {result['error']}"
+    except Exception as e:
+        return f"Find template error: {str(e)}"
+
+# Batch operation tools
+@mcp.tool()
+def pyautogui_batch_clicks(click_sequence: List[Dict[str, Any]]) -> str:
+    """Perform multiple click operations in sequence"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_batch_clicks({
+            "click_sequence": click_sequence
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Batch clicks completed: {data['total_clicks']} operations executed successfully"
+        else:
+            return f"Batch clicks failed: {result['error']}"
+    except Exception as e:
+        return f"Batch clicks error: {str(e)}"
+
+@mcp.tool()
+def pyautogui_batch_keys(key_sequence: List[Dict[str, Any]]) -> str:
+    """Perform multiple keyboard operations in sequence"""
+    if not PYAUTOGUI_AVAILABLE or not pyautogui_handler:
+        return "Error: PyAutoGUI is not available"
+    
+    try:
+        result = asyncio.run(pyautogui_handler.handle_batch_keys({
+            "key_sequence": key_sequence
+        }))
+        
+        if result["success"]:
+            data = result["data"]
+            return f"Batch keys completed: {data['total_operations']} operations executed successfully"
+        else:
+            return f"Batch keys failed: {result['error']}"
+    except Exception as e:
+        return f"Batch keys error: {str(e)}"
+
+
+# ==========================================
+# END PYAUTOGUI TOOL HANDLERS
+# ==========================================
 
 
 # Main execution

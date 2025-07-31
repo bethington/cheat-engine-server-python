@@ -11,7 +11,8 @@ import time
 import psutil
 
 # Add server directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'server'))
+server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'server')
+sys.path.insert(0, server_path)
 
 async def test_server_accessibility():
     """Test if the server is accessible and responding"""
@@ -39,8 +40,8 @@ async def test_server_accessibility():
         from process.manager import ProcessManager
         print("✅ ProcessManager imported successfully")
         
-        from memory.reader import MemoryReader
-        print("✅ MemoryReader imported successfully")
+        # Note: Memory functionality removed - all memory searches now done via Cheat Engine
+        print("✅ Memory functionality delegated to Cheat Engine")
         
         from config.whitelist import ProcessWhitelist
         print("✅ ProcessWhitelist imported successfully")
@@ -52,7 +53,7 @@ async def test_server_accessibility():
         
         # Test whitelist functionality
         whitelist = ProcessWhitelist()
-        whitelist.load_from_file('process_whitelist.json')
+        whitelist.load_whitelist('server/process_whitelist.json')
         print(f"✅ ProcessWhitelist working: {len(whitelist.entries)} entries loaded")
         
     except Exception as e:
@@ -87,12 +88,11 @@ async def test_server_accessibility():
         try:
             test_pid = notepad_processes[0]['pid']
             # Test if process is in whitelist
-            if whitelist.is_process_allowed(notepad_processes[0]['name']):
+            if whitelist.is_allowed(notepad_processes[0]['name']):
                 print(f"✅ Notepad.exe is in whitelist")
                 
-                # Test memory reader initialization
-                memory_reader = MemoryReader()
-                print("✅ MemoryReader initialized")
+                # Note: Memory functionality removed - all memory searches now done via Cheat Engine
+                print("✅ Memory operations delegated to Cheat Engine")
                 
                 print(f"✅ Ready to attach to PID {test_pid}")
             else:
