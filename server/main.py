@@ -34,12 +34,15 @@ try:
         sys.path.insert(0, str(parent_dir))
     from automation_tools import register_automation_tools
     from gui_automation.tools.mcp_tools import ALL_PYAUTOGUI_TOOLS, PyAutoGUIToolHandler
+    from window_automation.tools.mcp_tools import ALL_PYWINAUTO_TOOLS, PyWinAutoToolHandler
     AUTOMATION_AVAILABLE = True
     PYAUTOGUI_AVAILABLE = True
-    logger.info("Automation tools and PyAutoGUI modules loaded successfully")
+    PYWINAUTO_AVAILABLE = True
+    logger.info("Automation tools, PyAutoGUI, and PyWinAuto modules loaded successfully")
 except ImportError as e:
     AUTOMATION_AVAILABLE = False
     PYAUTOGUI_AVAILABLE = False
+    PYWINAUTO_AVAILABLE = False
     logger.warning(f"Automation tools not available: {e}")
 except ImportError as e:
     logger.warning(f"Automation tools not available: {e}")
@@ -76,6 +79,16 @@ if PYAUTOGUI_AVAILABLE:
     except Exception as e:
         logger.warning(f"Failed to initialize PyAutoGUI handler: {e}")
         PYAUTOGUI_AVAILABLE = False
+
+# Initialize PyWinAuto handler
+pywinauto_handler = None
+if PYWINAUTO_AVAILABLE:
+    try:
+        pywinauto_handler = PyWinAutoToolHandler()
+        logger.info("PyWinAuto handler initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize PyWinAuto handler: {e}")
+        PYWINAUTO_AVAILABLE = False
 
 # Current attached process
 current_process = None
@@ -1007,6 +1020,217 @@ def pyautogui_batch_keys(key_sequence: List[Dict[str, Any]]) -> str:
 
 # ==========================================
 # END PYAUTOGUI TOOL HANDLERS
+# ==========================================
+
+
+# ==========================================
+# PYWINAUTO TOOL HANDLERS
+# ==========================================
+
+# Application management tools
+@mcp.tool()
+def pywinauto_connect_application(process_id: Optional[int] = None, path: Optional[str] = None, backend: str = "uia") -> str:
+    """Connect to an existing Windows application using PyWinAuto"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_connect_application({
+            "process_id": process_id,
+            "path": path,
+            "backend": backend
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error connecting to application: {str(e)}"
+
+
+@mcp.tool()
+def pywinauto_launch_application(path: str, arguments: str = "", work_dir: Optional[str] = None, backend: str = "uia", timeout: float = 10.0) -> str:
+    """Launch and connect to a Windows application using PyWinAuto"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_launch_application({
+            "path": path,
+            "arguments": arguments,
+            "work_dir": work_dir,
+            "backend": backend,
+            "timeout": timeout
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error launching application: {str(e)}"
+
+
+@mcp.tool()
+def pywinauto_close_application(process_id: int, force: bool = False) -> str:
+    """Close a connected Windows application"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_close_application({
+            "process_id": process_id,
+            "force": force
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error closing application: {str(e)}"
+
+
+# Window and element discovery tools
+@mcp.tool()
+def pywinauto_find_windows(title: Optional[str] = None, class_name: Optional[str] = None, process_id: Optional[int] = None, backend: str = "uia") -> str:
+    """Find Windows desktop windows by various criteria"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_find_windows({
+            "title": title,
+            "class_name": class_name,
+            "process_id": process_id,
+            "backend": backend
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error finding windows: {str(e)}"
+
+
+@mcp.tool()
+def pywinauto_find_element(process_id: int, window_title: Optional[str] = None, automation_id: Optional[str] = None, 
+                          name: Optional[str] = None, class_name: Optional[str] = None, 
+                          control_type: Optional[str] = None, index: int = 0) -> str:
+    """Find UI elements within a Windows application"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_find_element({
+            "process_id": process_id,
+            "window_title": window_title,
+            "automation_id": automation_id,
+            "name": name,
+            "class_name": class_name,
+            "control_type": control_type,
+            "index": index
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error finding element: {str(e)}"
+
+
+@mcp.tool()
+def pywinauto_get_window_hierarchy(process_id: int, window_title: Optional[str] = None, max_depth: int = 3) -> str:
+    """Get the UI element hierarchy tree for a window"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        result = asyncio.run(pywinauto_handler.handle_get_window_hierarchy({
+            "process_id": process_id,
+            "window_title": window_title,
+            "max_depth": max_depth
+        }))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error getting window hierarchy: {str(e)}"
+
+
+# UI interaction tools
+@mcp.tool()
+def pywinauto_click_element(process_id: int, window_title: Optional[str] = None, automation_id: Optional[str] = None,
+                           name: Optional[str] = None, class_name: Optional[str] = None, 
+                           control_type: Optional[str] = None, button: str = "left", double: bool = False) -> str:
+    """Click on a UI element in a Windows application"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        # Build element criteria from provided parameters
+        arguments = {"process_id": process_id, "button": button, "double": double}
+        if window_title:
+            arguments["window_title"] = window_title
+        if automation_id:
+            arguments["automation_id"] = automation_id
+        if name:
+            arguments["name"] = name
+        if class_name:
+            arguments["class_name"] = class_name
+        if control_type:
+            arguments["control_type"] = control_type
+        
+        result = asyncio.run(pywinauto_handler.handle_click_element(arguments))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error clicking element: {str(e)}"
+
+
+@mcp.tool()
+def pywinauto_type_text(process_id: int, text: str, window_title: Optional[str] = None, 
+                       automation_id: Optional[str] = None, name: Optional[str] = None, 
+                       class_name: Optional[str] = None, control_type: Optional[str] = None, 
+                       clear_first: bool = True) -> str:
+    """Type text into a UI element in a Windows application"""
+    if not PYWINAUTO_AVAILABLE or not pywinauto_handler:
+        return "Error: PyWinAuto is not available"
+    
+    try:
+        # Build element criteria from provided parameters
+        arguments = {"process_id": process_id, "text": text, "clear_first": clear_first}
+        if window_title:
+            arguments["window_title"] = window_title
+        if automation_id:
+            arguments["automation_id"] = automation_id
+        if name:
+            arguments["name"] = name
+        if class_name:
+            arguments["class_name"] = class_name
+        if control_type:
+            arguments["control_type"] = control_type
+        
+        result = asyncio.run(pywinauto_handler.handle_type_text(arguments))
+        
+        if result["success"]:
+            return result["content"][0].text
+        else:
+            return f"Error: {result['error']}"
+    except Exception as e:
+        return f"Error typing text: {str(e)}"
+
+
+# ==========================================
+# END PYWINAUTO TOOL HANDLERS
 # ==========================================
 
 

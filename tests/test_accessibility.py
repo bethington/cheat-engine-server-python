@@ -14,7 +14,7 @@ import psutil
 server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'server')
 sys.path.insert(0, server_path)
 
-async def test_server_accessibility():
+def test_server_accessibility():
     """Test if the server is accessible and responding"""
     print("🔍 Testing MCP Cheat Engine Server Accessibility")
     print("=" * 60)
