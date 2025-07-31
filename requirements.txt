@@ -1,0 +1,4 @@
+mcp>=1.0.0
+trio>=0.22.0
+psutil>=5.9.0
+capstone>=5.0.0
