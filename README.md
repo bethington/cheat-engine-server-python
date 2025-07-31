@@ -60,6 +60,27 @@ This server operates in **READ-ONLY mode** for safety. It can read and analyze m
 3. **Read memory**: Use `read_memory_region` to examine memory
 4. **Detach safely**: Use `detach_from_process` when done
 
+### 🔌 Claude Desktop MCP Setup
+
+**📖 For detailed Claude Desktop setup instructions, see [MCP_SETUP.md](MCP_SETUP.md)**
+
+Quick configuration summary:
+1. **Find your Claude Desktop config**: `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
+2. **Add the MCP server configuration**:
+```json
+{
+  "mcpServers": {
+    "cheat-engine": {
+      "command": "python",
+      "args": ["path\\to\\server\\main.py", "--debug", "--read-only"],
+      "cwd": "path\\to\\cheat-engine-server-python"
+    }
+  }
+}
+```
+3. **Restart Claude Desktop**
+4. **Test**: Ask Claude to "list processes using the MCP server"
+
 ---
 
 ## 📦 Installation

@@ -13,12 +13,12 @@ license = {text = "MIT"}
 classifiers = [
     "Private :: Do Not Upload"  # Prevents accidental uploads to PyPI
 ]
-
-[project.dependencies]
-mcp = ">=1.0.0"
-trio = ">=0.22.0"
-psutil = ">=5.9.0"
-capstone = ">=5.0.0"
+dependencies = [
+    "mcp>=1.0.0",
+    "trio>=0.22.0", 
+    "psutil>=5.9.0",
+    "capstone>=5.0.0"
+]
 
 [tool.setuptools]
 packages = ["server"]
