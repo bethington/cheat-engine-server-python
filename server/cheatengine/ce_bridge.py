@@ -135,22 +135,248 @@ class CheatEngineBridge:
         )
     
     def _get_ce_version(self, exe_path: Path) -> str:
-        """Get Cheat Engine version from executable"""
+        """Get Cheat Engine version from executable using multiple methods"""
+        version_info = {
+            'file_version': 'Unknown',
+            'product_version': 'Unknown',
+            'version_string': 'Unknown'
+        }
+        
         try:
-            # Try to get version from file properties
-            import win32api
+            # Method 1: Try win32api for detailed version info
             try:
+                import win32api
                 info = win32api.GetFileVersionInfo(str(exe_path), "\\")
                 ms = info['FileVersionMS']
                 ls = info['FileVersionLS']
-                version = f"{win32api.HIWORD(ms)}.{win32api.LOWORD(ms)}.{win32api.HIWORD(ls)}.{win32api.LOWORD(ls)}"
-                return version
+                file_version = f"{win32api.HIWORD(ms)}.{win32api.LOWORD(ms)}.{win32api.HIWORD(ls)}.{win32api.LOWORD(ls)}"
+                version_info['file_version'] = file_version
+                
+                # Try to get product version
+                try:
+                    product_info = win32api.GetFileVersionInfo(str(exe_path), "\\VarFileInfo\\Translation")
+                    if product_info:
+                        lang, codepage = product_info[0]
+                        product_version = win32api.GetFileVersionInfo(str(exe_path), f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\ProductVersion")
+                        if product_version:
+                            version_info['product_version'] = product_version
+                except:
+                    pass
+                    
+                return file_version
+                
             except ImportError:
-                # Fallback if win32api not available
-                return "Unknown"
+                # Method 2: Try alternative version detection using ctypes
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    # Get file version info size
+                    size = ctypes.windll.version.GetFileVersionInfoSizeW(str(exe_path), None)
+                    if size:
+                        res = ctypes.create_string_buffer(size)
+                        ctypes.windll.version.GetFileVersionInfoW(str(exe_path), None, size, res)
+                        
+                        # Extract version info
+                        r = ctypes.c_uint()
+                        l = ctypes.c_uint()
+                        ctypes.windll.version.VerQueryValueW(res, "\\", ctypes.byref(r), ctypes.byref(l))
+                        
+                        version_struct = ctypes.cast(r, ctypes.POINTER(ctypes.c_uint * 4)).contents
+                        version = f"{version_struct[0] >> 16}.{version_struct[0] & 0xFFFF}.{version_struct[1] >> 16}.{version_struct[1] & 0xFFFF}"
+                        version_info['file_version'] = version
+                        return version
+                except:
+                    pass
+            
+            # Method 3: Parse version from filename if possible
+            filename = exe_path.name.lower()
+            import re
+            version_pattern = r'(\d+\.\d+(?:\.\d+)?(?:\.\d+)?)'
+            match = re.search(version_pattern, filename)
+            if match:
+                version_info['version_string'] = match.group(1)
+                return match.group(1)
+                
         except Exception as e:
-            logger.warning(f"Could not determine CE version: {e}")
-            return "Unknown"
+            logger.warning(f"Could not determine CE version from {exe_path}: {e}")
+        
+        return "Unknown"
+    
+    def get_cheat_engine_version_info(self) -> Dict[str, Any]:
+        """Get comprehensive Cheat Engine version and installation information"""
+        info = {
+            'detected': self.ce_installation.available,
+            'installation_path': self.ce_installation.path,
+            'executable_path': self.ce_installation.executable,
+            'version': self.ce_installation.version,
+            'detection_methods': [],
+            'running_processes': [],
+            'registry_info': {},
+            'alternative_installations': []
+        }
+        
+        # Method 1: File system detection (already done in __init__)
+        if self.ce_installation.available:
+            info['detection_methods'].append({
+                'method': 'file_system',
+                'status': 'success',
+                'path': self.ce_installation.path,
+                'version': self.ce_installation.version,
+                'executable': self.ce_installation.executable
+            })
+        
+        # Method 2: Check for running Cheat Engine processes
+        try:
+            import psutil
+            ce_processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+                try:
+                    proc_name = proc.info['name'].lower()
+                    if any(ce_name in proc_name for ce_name in ['cheatengine', 'dbengine']):
+                        proc_info = {
+                            'pid': proc.info['pid'],
+                            'name': proc.info['name'],
+                            'exe_path': proc.info['exe'],
+                            'cmdline': proc.info['cmdline']
+                        }
+                        
+                        # Try to get version from running process
+                        if proc.info['exe']:
+                            try:
+                                version = self._get_ce_version(Path(proc.info['exe']))
+                                proc_info['version'] = version
+                            except:
+                                proc_info['version'] = 'Unknown'
+                        
+                        ce_processes.append(proc_info)
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    # Skip processes that are inaccessible
+                    continue
+                        
+            info['running_processes'] = ce_processes
+            if ce_processes:
+                info['detection_methods'].append({
+                    'method': 'running_process',
+                    'status': 'success',
+                    'count': len(ce_processes),
+                    'processes': ce_processes
+                })
+                
+        except Exception as e:
+            logger.warning(f"Failed to check for running CE processes: {e}")
+            info['detection_methods'].append({
+                'method': 'running_process',
+                'status': 'error',
+                'error': str(e)
+            })
+        
+        # Method 3: Enhanced registry detection
+        try:
+            import winreg
+            registry_keys = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Cheat Engine"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Cheat Engine"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Cheat Engine"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\CheatEngine"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\CheatEngine")
+            ]
+            
+            for hkey, subkey in registry_keys:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as key:
+                        reg_info = {}
+                        try:
+                            reg_info['install_location'], _ = winreg.QueryValueEx(key, "InstallLocation")
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            reg_info['display_version'], _ = winreg.QueryValueEx(key, "DisplayVersion")
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            reg_info['display_name'], _ = winreg.QueryValueEx(key, "DisplayName")
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            reg_info['publisher'], _ = winreg.QueryValueEx(key, "Publisher")
+                        except FileNotFoundError:
+                            pass
+                        
+                        if reg_info:
+                            info['registry_info'][f"{hkey}\\{subkey}"] = reg_info
+                            
+                except FileNotFoundError:
+                    continue
+                    
+            if info['registry_info']:
+                info['detection_methods'].append({
+                    'method': 'registry',
+                    'status': 'success',
+                    'registry_entries': len(info['registry_info'])
+                })
+                
+        except Exception as e:
+            logger.warning(f"Failed to check registry for CE info: {e}")
+            info['detection_methods'].append({
+                'method': 'registry',
+                'status': 'error',
+                'error': str(e)
+            })
+        
+        # Method 4: Search for alternative installations
+        try:
+            alternative_paths = [
+                r"C:\dbengine",
+                r"C:\Program Files\Cheat Engine",
+                r"C:\Program Files (x86)\Cheat Engine", 
+                r"C:\Cheat Engine",
+                r"D:\Cheat Engine",
+                r"E:\Cheat Engine",
+                str(Path.home() / "Desktop" / "Cheat Engine"),
+                str(Path.home() / "Downloads" / "Cheat Engine")
+            ]
+            
+            alternatives = []
+            for alt_path in alternative_paths:
+                alt_path_obj = Path(alt_path)
+                if alt_path_obj.exists() and str(alt_path_obj) != self.ce_installation.path:
+                    # Try different executable names
+                    exe_candidates = [
+                        "dbengine-x86_64.exe",
+                        "cheatengine-x86_64.exe", 
+                        "cheatengine.exe"
+                    ]
+                    
+                    for exe_name in exe_candidates:
+                        exe_path = alt_path_obj / exe_name
+                        if exe_path.exists():
+                            version = self._get_ce_version(exe_path)
+                            alternatives.append({
+                                'path': str(alt_path_obj),
+                                'executable': str(exe_path),
+                                'version': version
+                            })
+                            break
+            
+            info['alternative_installations'] = alternatives
+            if alternatives:
+                info['detection_methods'].append({
+                    'method': 'alternative_search',
+                    'status': 'success',
+                    'found_count': len(alternatives)
+                })
+                
+        except Exception as e:
+            logger.warning(f"Failed to search for alternative CE installations: {e}")
+            info['detection_methods'].append({
+                'method': 'alternative_search',
+                'status': 'error',
+                'error': str(e)
+            })
+        
+        return info
     
     def _setup_windows_api(self):
         """Setup Windows API function signatures"""
