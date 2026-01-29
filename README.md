@@ -1,5 +1,7 @@
 # MCP Cheat Engine Server Documentation
 
+> If you find this useful, please ⭐ star the repo — it helps others discover it!
+
 ## 📋 Table of Contents
 
 1. [Overview](#overview)
