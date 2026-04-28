@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/bethington-cheat-engine-server-python-badge.png)](https://mseep.ai/app/bethington-cheat-engine-server-python)
+
 # MCP Cheat Engine Server Documentation
 
 > If you find this useful, please ⭐ star the repo — it helps others discover it!
